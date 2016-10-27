@@ -69,6 +69,9 @@ type (
 		K        int
 		At       time.Time
 
+		Difficulty Difficulty
+		Subsidy    float64
+
 		z         *Zero
 		lastBlock string
 	}
@@ -80,12 +83,13 @@ type (
 		K      int `json:"k"`
 
 		Header struct {
-			Version        uint32 `json:"version"`
-			HashPrevBlock  string `json:"prevblock"`
-			HashMerkleRoot string `json:"merkleroot"`
-			Reserved       string `json:"reserved"`
-			Time           uint32 `json:"time"`
-			Bits           string `json:"bits"`
+			MinerSubsidy   float64 `json:"miner_subsidy"`
+			Version        uint32  `json:"version"`
+			HashPrevBlock  string  `json:"prevblock"`
+			HashMerkleRoot string  `json:"merkleroot"`
+			Reserved       string  `json:"reserved"`
+			Time           uint32  `json:"time"`
+			Bits           string  `json:"bits"`
 		} `json:"header"`
 
 		Raw string `json:"raw"`
@@ -250,6 +254,7 @@ func makeWork(count uint64, workTemplate workTemplate) (*Work, error) {
 		N:        workTemplate.N,
 		K:        workTemplate.K,
 		At:       time.Now(),
+		Subsidy:  workTemplate.Header.MinerSubsidy,
 	}
 
 	w.SWork, err = json.Marshal(w.ResponseNotify)
@@ -271,6 +276,8 @@ func makeWork(count uint64, workTemplate workTemplate) (*Work, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	w.Difficulty = FromTarget(w.Target)
 
 	return &w, nil
 }
@@ -541,10 +548,27 @@ func (zc *ZeroClient) Serve() (err error) {
 		return nil
 	}
 
-	// Vardiff difficulty
-	diff := Difficulty(zc.z.Config.VardiffInitial)
-
 	var currWork, prevWork *Work
+	rotateWork := func(work *Work) error {
+		// Send current difficulty
+		if err := zc.lrw.WriteStratumTimed(stratum.ResponseSetTarget{
+			Target: vardiffDifficulty.ToTarget(),
+		}, time.Now().Add(WriteTimeout)); err != nil {
+			return err
+		}
+
+		if err := zc.lrw.WriteStratumRaw(work.SWork, time.Now().Add(WriteTimeout)); err != nil {
+			return err
+		}
+
+		prevWork, currWork = currWork, work
+		return nil
+	}
+
+	// Wait for the assignment of the first job before starting
+	if err := rotateWork(<-zc.WorkChan); err != nil {
+		return err
+	}
 
 	for {
 		select {
@@ -566,13 +590,13 @@ func (zc *ZeroClient) Serve() (err error) {
 					req := req.(stratum.RequestSubmit)
 
 					// Calculate the target
-					shareStatus = currWork.Check(req.NTime, noncePart1[:], req.NoncePart2[:], req.Solution, diff.ToTarget(), false)
+					shareStatus = currWork.Check(req.NTime, noncePart1[:], req.NoncePart2[:], req.Solution, vardiffDifficulty.ToTarget(), false)
 					if shareStatus == ShareInvalid {
 						if prevWork != nil {
 							// Allow stale shares in the last N seconds.
 							if time.Now().Sub(prevWork.At) < 3*time.Second {
 								// Check if this was a stale share.
-								res := prevWork.Check(req.NTime, noncePart1[:], req.NoncePart2[:], req.Solution, diff.ToTarget(), prevWork.Height != currWork.Height)
+								res := prevWork.Check(req.NTime, noncePart1[:], req.NoncePart2[:], req.Solution, vardiffDifficulty.ToTarget(), prevWork.Height != currWork.Height)
 								if res != ShareInvalid {
 									// Accept it anyway
 									shareStatus = ShareOK
@@ -591,11 +615,13 @@ func (zc *ZeroClient) Serve() (err error) {
 
 				// Submit the share.
 				zc.z.DB.SubmitChan <- Share{
-					Submitter:  username,
-					Difficulty: float64(vardiffDifficulty),
-					Host:       zc.conn.RemoteAddr().String(),
-					Server:     zc.z.Config.Name,
-					Valid:      shareStatus == ShareBlock || shareStatus == ShareOK,
+					Submitter:     username,
+					Difficulty:    float64(vardiffDifficulty),
+					NetDifficulty: float64(currWork.Difficulty),
+					Subsidy:       float64(currWork.Subsidy),
+					Host:          zc.conn.RemoteAddr().String(),
+					Server:        zc.z.Config.Name,
+					Valid:         shareStatus == ShareBlock || shareStatus == ShareOK,
 				}
 
 				// If the user's over target already, run vardiff right here right now
@@ -616,18 +642,9 @@ func (zc *ZeroClient) Serve() (err error) {
 				return errors.New("work chan closed")
 			}
 
-			// Send current difficulty
-			if err := zc.lrw.WriteStratumTimed(stratum.ResponseSetTarget{
-				Target: vardiffDifficulty.ToTarget(),
-			}, time.Now().Add(WriteTimeout)); err != nil {
+			if err := rotateWork(work); err != nil {
 				return err
 			}
-
-			if err := zc.lrw.WriteStratumRaw(work.SWork, time.Now().Add(WriteTimeout)); err != nil {
-				return err
-			}
-
-			prevWork, currWork = currWork, work
 		}
 	}
 }

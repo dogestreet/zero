@@ -16,11 +16,13 @@ type DB struct {
 
 // A Share submitted to redis.
 type Share struct {
-	Submitter  string  `json:"sub"`
-	Difficulty float64 `json:"diff"`
-	Host       string  `json:"host"`
-	Server     string  `json:"srv"`
-	Valid      bool    `json:"valid"`
+	Submitter     string  `json:"addr"`
+	Difficulty    float64 `json:"diff"`
+	NetDifficulty float64 `json:"net_diff"`
+	Subsidy       float64 `json:"sub"`
+	Host          string  `json:"host"`
+	Server        string  `json:"srv"`
+	Valid         bool    `json:"valid"`
 }
 
 // NewDB from redis.
@@ -63,7 +65,6 @@ func NewDB(redisHost, redisPass string) (*DB, error) {
 // serve runs a loop that handles share submissions.
 func (db *DB) serve() {
 	for share := range db.SubmitChan {
-		log.Println("share", share)
 		func() {
 			conn := db.pool.Get()
 			defer conn.Close()
