@@ -118,3 +118,57 @@ func TestTargetCompare(t *testing.T) {
 		}
 	}
 }
+
+func TestHeaderBuild(t *testing.T) {
+	table := []struct {
+		target string
+
+		version   string
+		prevBlock string
+		merkle    string
+		reserved  string
+		nbits     string
+
+		ntime      string
+		noncePart1 string
+		noncePart2 string
+		solution   string
+	}{
+		{
+			target: "03ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+
+			version:   "04000000",
+			prevBlock: "e59e611ae9c3cb415c93dd2d10b0da4b05cd981b8fffcf801c7bfe241f010000",
+			merkle:    "57c086bbb03b8387b48ec511b0de35a5fb5cbc3f474796f1befbff6a270611f1",
+			reserved:  "0000000000000000000000000000000000000000000000000000000000000000",
+			nbits:     "1e06308e",
+
+			ntime:      "58118ca4",
+			noncePart1: "8c35102a7d927f400100000000000000",
+			noncePart2: "65000000000000000000000000000000",
+			solution:   "001e1b51f2c2865d7dd57495c95afd6a84c1375d0f0628c701afd6a4d1366141093f0e4a358d2833ac10007543e4c30bb770aaabc2d3afbc137ccc8e17d36308f72e118c1da9152be04113abc8c0e861e77ac10f0eaf8d7d8346c3ee537cf54af7cfd33a219397552131d495e6684fb5dfbeed439927ab47dd089e5d5f9c1226a73cae9099412f695426ce270c51280ff427391231133c73592e7d24f1a54692407bbf3278be8d240712375fa0aeff03fad680c7741a1e208ff5a8146224c5a66813dc17ab7d99e4652aec980129be780b7808c03bdaba2062293f6100956ebeacf769e91e122d08d68ce8e245e5144e9b92274e444cb57a02959cff1d3097970fe56983df1ee23c3748fdee485e38734d1de583eb820acfbee536b86737e88326ad2d5d5f8633087c37055d469994a983fa54e6326ae2e0b850ea37f5a7696e8eb70b4702c5ffa0cf11d1c2a4914fa6004bb12f7228528dde88e07345de39f071872b15b90919c6916af2a295d41492ef11df9dbda5ff706579052baaff19a3af235ed7a33a3f65b686947dba2a9518735fad7807e63ff3beb2f8f1e6634d1c2b5b1bfb04e6340ba54a4311bf7211a12dd472e0b1b0fa3c571950c4cff89619fff729e28225d96bbefccb99dd3f0ce3c3d3ebaf190de607c1db4eb38c561952344f1845356305bbf35649f561d4df80444f33ca21df09b70220b93031173f174f37f3956c2bbd71660a713c6b1d9dd6a0d2cc8bf479861335623484d99ad31c8e630a53625b4bcb221902ef38dc84528b5ed7f1bbdd4c310c1ef2c8974dcfdc02a4ad3f330c79e8c0fc4b1c083d166646b8052deb46f0f0b38a4038bc0fdf09590cd2e351ba0f731882907219c6fb85717c2ef4d3171137de80aa1c14572f41f2c375996cc4b7e5fd71ea440c466767e712e98cd0e87b96e0784e932b38f442004301dce245177177187107d3a568385efcd60c6f06fab4ae69e47845c945d181f99657ec645ea94d8a05a493c2c31fd56746837808647884ea9376f9bfa116fb4a513651458b64a9d3057e221075b92018c7bb1bdea1bb94120acbf593a3ffec71a261fe4274f1b128c6dbbca28a982294bb749da52d7d492896b47ffa325dc7b8638df2b4fdbb5813b7dee2b24ef0d8ba4641b9ceea3e14dc75aba5377d554974527f99bc12e6054261638331fadfd5f9320f4090e8e188db1669062c9ba3df84e2b589a12e2634f973f1c3a3fe1e6fba19426d5f0cda78e6d8d7c26b81efea8acc83fcf13b2cfcf35f9b0e96a8954275b4a4cebfb1dfbb3863740c5fb52e6a213df160fb02c1a1498d6de4111b5b60109986190286acbe74d9811097533f39f785bebf82120474116bd41bf76ff534115f7ad5aa8428776c93256cbe90f51d26e16325864e9d4d598594beb832b90145334cbed24d930eaf2081c0523312deef57a22d04ad8b076e1a2cfae4b9510c06a13c61f9c593b2210d1e121406f22ec19f0ad20b50397dc8947bf327d60ea9ce0ee235e62ddb89f3ed65b34432d39357e27c0a34ce0e0736db3dc9083490f648580aed14d8476712b45d69681a684b3720248b11f3d2593f7bfa4bc21a43b2df3b484035d37ba2a2b5ea4d010b249d324a483f5fb310a57e6b3fab890341e2defa74b49a1531085e1afcd69e38bd0fad90cbf0cb7cf8d128f935925b27adce575bbba325afc8ab46f4bda64b1b74d0a5139adad22a510d679cf5a2b8c172a845eb0e38fad54729b51aa7eeada5a855c8803ed48d5f417c3bee5e0add1b240e8bb990b2b632a93c76ca828cfd55a474143b3bf7fe5d09256a3d32639dc03b090b834ad54e13269326a4daa975017ed4bb63753d86b23cdb31d331ddbf05094e7c94aa33664019c4d4caad99363d91",
+		},
+	}
+
+	for _, h := range table {
+		target, _ := stratum.HexToUint256(h.target)
+		version, _ := stratum.HexToUint32(h.version)
+		prevBlock, _ := hex.DecodeString(h.prevBlock)
+		merkle, _ := hex.DecodeString(h.merkle)
+		reserved, _ := hex.DecodeString(h.reserved)
+		nbits, _ := stratum.HexToUint32(h.nbits)
+
+		ntime, _ := stratum.HexToUint32(h.ntime)
+		noncePart1, _ := stratum.HexToUint128(h.noncePart1)
+		noncePart2, _ := stratum.HexToUint128(h.noncePart2)
+		solution, _ := hex.DecodeString(h.solution)
+
+		header := BuildBlockHeader(version, prevBlock, merkle, reserved, ntime, nbits, noncePart1[:], noncePart2[:])
+
+		globalTarget, _ := CompactToTarget(nbits)
+
+		if res := Validate(200, 9, header.Bytes(), solution, target, globalTarget); res != ShareOK {
+			t.Fatal("bad header:", res)
+		}
+	}
+}

@@ -54,6 +54,8 @@ type (
 	// RequestSubscribe is sent by the client when during the initial connect.
 	RequestSubscribe struct {
 		RequestBase
+
+		Params []string
 	}
 
 	// RequestAuthorise ...
@@ -101,7 +103,7 @@ type (
 	// See: https://github.com/zcash/zcash/blob/70db019c6ae989acde0a0affd6a1f1c28ec9a3d2/src/primitives/block.h#L23
 	ResponseNotify struct {
 		Job            string
-		Version        int32 // Block header version 4
+		Version        uint32 // Block header version 4
 		HashPrevBlock  Uint256
 		HashMerkleRoot Uint256
 		HashReserved   Uint256
@@ -204,8 +206,14 @@ func Parse(data []byte) (Request, error) {
 
 	switch RequestType(raw.Method) {
 	case Subscribe:
+		var params []string
+		if err := json.Unmarshal(*raw.Params, &params); err != nil {
+			return nil, errwrap.Wrapf("error decoding auth params: {{err}}", ErrBadInput)
+		}
+
 		return RequestSubscribe{
 			RequestBase: base,
+			Params:      params,
 		}, nil
 
 	case Authorise:
@@ -236,10 +244,14 @@ func Parse(data []byte) (Request, error) {
 			return nil, ErrBadInput
 		}
 
-		solution, err := readHex(params[4], 1344)
+		// The solution includes the 3 bytes of the solution size.
+		solution, err := readHex(params[4], 1347)
 		if err != nil {
 			return nil, ErrBadInput
 		}
+
+		// Remove the compact size
+		solution = solution[3:]
 
 		return RequestSubmit{
 			RequestBase: base,
@@ -291,7 +303,7 @@ func (r ResponseNotify) MarshalJSON() ([]byte, error) {
 		Method: RequestType(Notify),
 	}, []interface{}{
 		r.Job,
-		r.Version,
+		ToHex(r.Version),
 		ToHex(r.HashPrevBlock),
 		ToHex(r.HashMerkleRoot),
 		ToHex(r.HashReserved),

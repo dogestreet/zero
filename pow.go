@@ -1,11 +1,28 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 
 	"github.com/dogestreet/zero/equihash"
 	"github.com/dogestreet/zero/stratum"
 )
+
+// BuildBlockHeader constructs a block header.
+func BuildBlockHeader(version uint32, hashPrevBlock, hashMerkleRoot, hashReserved []byte, nTime, nBits uint32, noncePart1, noncePart2 []byte) *bytes.Buffer {
+	buffer := bytes.NewBuffer(nil)
+	_ = binary.Write(buffer, binary.BigEndian, version)
+	_, _ = buffer.Write(hashPrevBlock)
+	_, _ = buffer.Write(hashMerkleRoot)
+	_, _ = buffer.Write(hashReserved)
+	_ = binary.Write(buffer, binary.BigEndian, nTime)
+	_ = binary.Write(buffer, binary.BigEndian, nBits)
+	_, _ = buffer.Write(noncePart1)
+	_, _ = buffer.Write(noncePart2)
+
+	return buffer
+}
 
 // Validate checks POW validity of a header.
 func Validate(n, k int, headerNonce []byte, solution []byte, shareTarget, globalTarget stratum.Uint256) ShareStatus {

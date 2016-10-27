@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -77,7 +76,7 @@ type (
 		K      int `json:"k"`
 
 		Header struct {
-			Version        int32  `json:"version"`
+			Version        uint32 `json:"version"`
 			HashPrevBlock  string `json:"prevblock"`
 			HashMerkleRoot string `json:"merkleroot"`
 			Reserved       string `json:"reserved"`
@@ -147,18 +146,15 @@ const (
 // Check the proof of work.
 // Returns the difficulty, return error if invalid.
 func (w *Work) Check(nTime uint32, noncePart1, noncePart2, solution []byte, shareTarget stratum.Uint256, dead bool) ShareStatus {
-	buffer := bytes.NewBuffer(nil)
-	_ = binary.Write(buffer, binary.LittleEndian, w.Version)
-	_, _ = buffer.Write(w.HashPrevBlock[:])
-	_, _ = buffer.Write(w.HashMerkleRoot[:])
-	_, _ = buffer.Write(w.HashReserved[:])
-	_ = binary.Write(buffer, binary.LittleEndian, nTime)
-	_ = binary.Write(buffer, binary.LittleEndian, w.NBits)
-	_, _ = buffer.Write(noncePart1)
-	_, _ = buffer.Write(noncePart2)
+
+	buffer := BuildBlockHeader(w.Version, w.HashPrevBlock[:], w.HashMerkleRoot[:], w.HashReserved[:], w.NTime, w.NBits, noncePart1, noncePart2)
 
 	result := Validate(w.N, w.K, buffer.Bytes(), solution, shareTarget, w.Target)
 	if result == ShareBlock {
+		if dead {
+			return result
+		}
+
 		_, _ = buffer.Write([]byte{0xfd, 0x40, 0x05})
 		_, _ = buffer.Write(solution)
 
@@ -169,6 +165,12 @@ func (w *Work) Check(nTime uint32, noncePart1, noncePart2, solution []byte, shar
 	}
 
 	return result
+}
+
+func reverse(b []byte) {
+	for i, j := 0, len(b)-1; i < j; i, j = i+1, j-1 {
+		b[i], b[j] = b[j], b[i]
+	}
 }
 
 // GetWork from the coin daemon.
@@ -183,6 +185,9 @@ func (z *Zero) GetWork() error {
 		return err
 	}
 
+	// SWork has a newline on the end
+	log.Print("[server] got new work: ", string(w.SWork))
+
 	z.SendWorkAll(w)
 	return nil
 }
@@ -192,6 +197,7 @@ func makeWork(count uint64, workTemplate workTemplate) (*Work, error) {
 	if err != nil {
 		return nil, err
 	}
+	reverse(prevBlock[:])
 
 	merkleRoot, err := stratum.HexToUint256(workTemplate.Header.HashMerkleRoot)
 	if err != nil {
@@ -207,6 +213,12 @@ func makeWork(count uint64, workTemplate workTemplate) (*Work, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Reverse the version
+	workTemplate.Header.Version = (uint32(workTemplate.Header.Version)&0xff000000)>>24 |
+		(uint32(workTemplate.Header.Version)&0x00ff0000)>>16 |
+		(uint32(workTemplate.Header.Version)&0x0000ff00)<<16 |
+		(uint32(workTemplate.Header.Version)&0x000000ff)<<24
 
 	w := Work{
 		ResponseNotify: stratum.ResponseNotify{
@@ -232,6 +244,7 @@ func makeWork(count uint64, workTemplate workTemplate) (*Work, error) {
 	if err != nil {
 		return nil, err
 	}
+	w.SWork = append(w.SWork, '\n')
 
 	w.RawBlock, err = hex.DecodeString(workTemplate.Raw)
 	if err != nil {
@@ -253,6 +266,8 @@ func makeWork(count uint64, workTemplate workTemplate) (*Work, error) {
 // Handle a new client connection.
 // This handler is executed in a goroutine.
 func (z *Zero) Handle(conn *net.TCPConn) error {
+	log.Println("[server] new connection from", conn.RemoteAddr())
+
 	if err := conn.SetKeepAlive(true); err != nil {
 		return err
 	}
@@ -296,9 +311,9 @@ func (z *Zero) Unsubscribe(zc *ZeroClient) {
 }
 
 // BlockNotify is used to notify the server that a new block has been found and that new work should be sent.
-func (z *Zero) BlockNotify(hash string) error {
-	// TODO:
-	return nil
+func (z *Zero) BlockNotify() error {
+	log.Println("[server]", "new block detected")
+	return z.GetWork()
 }
 
 // SubmitBlock to the RPC client.
@@ -347,7 +362,12 @@ func (z *Zero) SendWorkAll(w *Work) {
 }
 
 // Serve runs the client.
-func (zc *ZeroClient) Serve() error {
+func (zc *ZeroClient) Serve() (err error) {
+	log.Printf("[client %v %v] serving\n", zc.ID, zc.conn.RemoteAddr())
+	defer func() {
+		log.Printf("[client %v %v] disconnected with error: %v\n", zc.ID, zc.conn.RemoteAddr(), err)
+	}()
+
 	defer zc.conn.Close()
 
 	var noncePart1 stratum.Uint128
@@ -358,6 +378,11 @@ func (zc *ZeroClient) Serve() error {
 			return err
 		}
 
+		sub := subscribe.(stratum.RequestSubscribe)
+		if len(sub.Params) == 1 && sub.Params[0] == zc.z.Config.UpdateKey {
+			zc.z.BlockNotify()
+		}
+
 		// Write in the server ID
 		copy(noncePart1[:], zc.z.NoncePart1a[:])
 
@@ -365,13 +390,15 @@ func (zc *ZeroClient) Serve() error {
 		binary.PutUvarint(noncePart1[8:], uint64(zc.ID))
 
 		if err := zc.lrw.WriteStratumTimed(stratum.ResponseSubscribeReply{
-			ID:         subscribe.(stratum.RequestSubscribe).ID,
+			ID:         sub.ID,
 			Session:    "",
 			NoncePart1: noncePart1,
 		}, time.Now().Add(WriteTimeout)); err != nil {
 			return err
 		}
 	}
+
+	var username string
 
 	{ // Handle auth
 		auth, err := zc.lrw.WaitForType(stratum.Authorise, time.Now().Add(AuthTimeout))
@@ -382,10 +409,14 @@ func (zc *ZeroClient) Serve() error {
 		authReq := auth.(stratum.RequestAuthorise)
 		if ok, testnet := IsValidAddress(authReq.Username); !ok || zc.z.Config.Testnet != testnet {
 			if !ok {
-				return zc.lrw.WriteStratumTimed(stratum.ResponseGeneral{
+				if err := zc.lrw.WriteStratumTimed(stratum.ResponseGeneral{
 					ID:    authReq.ID,
 					Error: "Please double check your payout address, it appears to be invalid",
-				}, time.Now().Add(WriteTimeout))
+				}, time.Now().Add(WriteTimeout)); err != nil {
+					return err
+				}
+
+				return errors.New("invalid payout address")
 			}
 
 			if zc.z.Config.Testnet != testnet {
@@ -394,13 +425,21 @@ func (zc *ZeroClient) Serve() error {
 					msg = "Please double check your payout address, it appears to be a mainnet address (expecting a testnet address)"
 				}
 
-				return zc.lrw.WriteStratumTimed(stratum.ResponseGeneral{
+				if err := zc.lrw.WriteStratumTimed(stratum.ResponseGeneral{
 					ID:    authReq.ID,
 					Error: msg,
-				}, time.Now().Add(WriteTimeout))
+				}, time.Now().Add(WriteTimeout)); err != nil {
+					return err
+				}
+
+				return errors.New("payout address testnet mismatch")
 			}
 		}
+
+		username = authReq.Username
 	}
+
+	log.Printf("[client %v %v] authed with '%v'\n", zc.ID, zc.conn.RemoteAddr(), username)
 
 	// Subscribe onto the mining notifications
 	zc.z.Subscribe(zc)
@@ -414,6 +453,7 @@ func (zc *ZeroClient) Serve() error {
 		for {
 			req, err := zc.lrw.ReadStratumTimed(time.Now().Add(InactivityTimeout))
 			if err != nil {
+				log.Println("err", err)
 				return err
 			}
 
@@ -444,6 +484,8 @@ func (zc *ZeroClient) Serve() error {
 
 		estimatedHashPerSecond := EstimateHashPerSecond(vardiffShares, vardiffDifficulty, elapsedTime)
 		currentHashPerSecond := EstimateHashPerSecond(vardiffTarget, vardiffDifficulty, elapsedTime)
+
+		log.Println("vardiff adjustment", "est:", estimatedHashPerSecond, "curr:", currentHashPerSecond)
 
 		if vardiffShares > vardiffTarget && float64(vardiffSharesDead)/float64(vardiffShares) > 0.9 {
 			// TODO: logging
@@ -499,6 +541,8 @@ func (zc *ZeroClient) Serve() error {
 			case stratum.RequestSubmit:
 				req := req.(stratum.RequestSubmit)
 
+				log.Printf("%x %x %x %x\n", req.NTime, noncePart1, req.NoncePart2, req.Solution)
+
 				// Calculate the target
 				shareStatus := currWork.Check(req.NTime, noncePart1[:], req.NoncePart2[:], req.Solution, diff.ToTarget(), false)
 				if shareStatus == ShareInvalid {
@@ -524,7 +568,7 @@ func (zc *ZeroClient) Serve() error {
 
 				// TODO: redis publish, bad share bans
 				// TODO: logger for fail2ban
-				log.Println(req.NoncePart2, shareStatus)
+				log.Println("share", req.NoncePart2, shareStatus)
 
 			case stratum.RequestSuggestTarget:
 				// ignored, we use our own vardiff
@@ -537,18 +581,18 @@ func (zc *ZeroClient) Serve() error {
 				return errors.New("work chan closed")
 			}
 
-			if err := zc.lrw.WriteStratumRaw(work.SWork, time.Now().Add(WriteTimeout)); err != nil {
-				return err
-			}
-
-			prevWork, currWork = currWork, work
-
 			// Send current difficulty
 			if err := zc.lrw.WriteStratumTimed(stratum.ResponseSetTarget{
 				Target: vardiffDifficulty.ToTarget(),
 			}, time.Now().Add(WriteTimeout)); err != nil {
 				return err
 			}
+
+			if err := zc.lrw.WriteStratumRaw(work.SWork, time.Now().Add(WriteTimeout)); err != nil {
+				return err
+			}
+
+			prevWork, currWork = currWork, work
 		}
 	}
 }

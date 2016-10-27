@@ -1,6 +1,7 @@
 package stratum
 
 import (
+	"bytes"
 	"math/rand"
 	"testing"
 )
@@ -88,5 +89,16 @@ func TestHex(t *testing.T) {
 	_, err = HexToInt32("1200000000000000")
 	if err == nil {
 		t.Fatal("bad parse")
+	}
+}
+
+func TestHex2(t *testing.T) {
+	hash, err := HexToUint256("39b23a979cc8d880648f5b80ba6e9ebf94609c5a452e49f3493e6ec8b2020000")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Equal(hash[:], []byte("\x39\xb2\x3a\x97\x9c\xc8\xd8\x80\x64\x8f\x5b\x80\xba\x6e\x9e\xbf\x94\x60\x9c\x5a\x45\x2e\x49\xf3\x49\x3e\x6e\xc8\xb2\x02\x00\x00")) {
+		t.Fatal("bad conversion")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"time"
 
 	"net/http"
 	_ "net/http/pprof"
@@ -44,6 +45,9 @@ type Config struct {
 
 	// Testnet or not.
 	Testnet bool `json:"testnet"`
+
+	// UpdateKey used to notify the server of updates.
+	UpdateKey string `json:"update_key"`
 }
 
 func loadConfig() (cfg Config, err error) {
@@ -81,6 +85,29 @@ func main() {
 	cfg, err := loadConfig()
 	if err != nil {
 		log.Fatalln("Could not load configuration:", err)
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "notify" {
+		conn, err := net.Dial("tcp", cfg.Host)
+		if err != nil {
+			log.Fatalln("Could not connect to server", err)
+		}
+		defer conn.Close()
+
+		if err := conn.SetWriteDeadline(time.Now().Add(WriteTimeout)); err != nil {
+			log.Fatalln(err)
+		}
+
+		if _, err := conn.Write([]byte(`{"id": 1, "method": "mining.subscribe", "params": ["` + cfg.UpdateKey + `"]}` + "\n")); err != nil {
+			log.Fatalln(err)
+		}
+
+		var buf [1]byte
+		if _, err := conn.Read(buf[:]); err != nil {
+			// Wait for EOF
+		}
+
+		return
 	}
 
 	// Create the mining server
