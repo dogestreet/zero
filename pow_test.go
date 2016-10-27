@@ -57,7 +57,7 @@ func TestValidateBlocks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		res := Validate(n, k, headerNonce, solution, target, target)
+		res, _ := Validate(n, k, headerNonce, solution, target, target)
 		if res != ShareBlock {
 			t.Fatal("Failed: got:", res)
 		}
@@ -167,7 +167,7 @@ func TestHeaderBuild(t *testing.T) {
 
 		globalTarget, _ := CompactToTarget(nbits)
 
-		if res := Validate(200, 9, header.Bytes(), solution, target, globalTarget); res != ShareOK {
+		if res, _ := Validate(200, 9, header.Bytes(), solution, target, globalTarget); res != ShareOK {
 			t.Fatal("bad header:", res)
 		}
 	}

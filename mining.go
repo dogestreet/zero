@@ -62,6 +62,8 @@ func TargetCompare(a, b stratum.Uint256) int {
 
 // CompactToTarget converts a NDiff value to a Target.
 func CompactToTarget(x uint32) (stratum.Uint256, error) {
+	x = reverseUint32(x)
+
 	// The top byte is the number of bytes in the final string
 	var result stratum.Uint256
 	i := (x & 0xff000000) >> 24

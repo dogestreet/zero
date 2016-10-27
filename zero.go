@@ -66,7 +66,8 @@ type (
 		K        int
 		At       time.Time
 
-		z *Zero
+		z         *Zero
+		lastBlock string
 	}
 
 	// workTemplate used with the patched RPC call.
@@ -126,7 +127,7 @@ func NewZero(cfg Config) (*Zero, error) {
 	}
 
 	// Try and get work
-	if err := z.GetWork(); err != nil {
+	if err := z.GetWork(""); err != nil {
 		return nil, err
 	}
 
@@ -146,10 +147,9 @@ const (
 // Check the proof of work.
 // Returns the difficulty, return error if invalid.
 func (w *Work) Check(nTime uint32, noncePart1, noncePart2, solution []byte, shareTarget stratum.Uint256, dead bool) ShareStatus {
-
 	buffer := BuildBlockHeader(w.Version, w.HashPrevBlock[:], w.HashMerkleRoot[:], w.HashReserved[:], w.NTime, w.NBits, noncePart1, noncePart2)
 
-	result := Validate(w.N, w.K, buffer.Bytes(), solution, shareTarget, w.Target)
+	result, hash := Validate(w.N, w.K, buffer.Bytes(), solution, shareTarget, w.Target)
 	if result == ShareBlock {
 		if dead {
 			return result
@@ -161,7 +161,7 @@ func (w *Work) Check(nTime uint32, noncePart1, noncePart2, solution []byte, shar
 		// The buffer now contains the completed block header
 		// Fill in the rest of the block
 		_, _ = buffer.Write(w.RawBlock[buffer.Len():])
-		go w.z.SubmitBlock(buffer.Bytes())
+		go w.z.SubmitBlock(buffer.Bytes(), hash)
 	}
 
 	return result
@@ -173,8 +173,15 @@ func reverse(b []byte) {
 	}
 }
 
+func reverseUint32(x uint32) uint32 {
+	return (uint32(x)&0xff000000)>>24 |
+		(uint32(x)&0x00ff0000)>>8 |
+		(uint32(x)&0x0000ff00)<<8 |
+		(uint32(x)&0x000000ff)<<24
+}
+
 // GetWork from the coin daemon.
-func (z *Zero) GetWork() error {
+func (z *Zero) GetWork(lastBlock string) error {
 	var workTemplate workTemplate
 	if err := z.daemon.Call("zero_getblocktemplate", []interface{}{z.Config.CoinbaseAddress}, &workTemplate); err != nil {
 		return err
@@ -184,6 +191,8 @@ func (z *Zero) GetWork() error {
 	if err != nil {
 		return err
 	}
+	w.z = z
+	w.lastBlock = lastBlock
 
 	// SWork has a newline on the end
 	log.Print("[server] got new work: ", string(w.SWork))
@@ -203,22 +212,21 @@ func makeWork(count uint64, workTemplate workTemplate) (*Work, error) {
 	if err != nil {
 		return nil, err
 	}
+	reverse(merkleRoot[:])
 
 	reserved, err := stratum.HexToUint256(workTemplate.Header.Reserved)
 	if err != nil {
 		return nil, err
 	}
+	reverse(reserved[:])
 
 	bits, err := stratum.HexToUint32(workTemplate.Header.Bits)
 	if err != nil {
 		return nil, err
 	}
 
-	// Reverse the version
-	workTemplate.Header.Version = (uint32(workTemplate.Header.Version)&0xff000000)>>24 |
-		(uint32(workTemplate.Header.Version)&0x00ff0000)>>16 |
-		(uint32(workTemplate.Header.Version)&0x0000ff00)<<16 |
-		(uint32(workTemplate.Header.Version)&0x000000ff)<<24
+	// Reverse the version, nTime and nBits
+	workTemplate.Header.Version = reverseUint32(workTemplate.Header.Version)
 
 	w := Work{
 		ResponseNotify: stratum.ResponseNotify{
@@ -227,8 +235,8 @@ func makeWork(count uint64, workTemplate workTemplate) (*Work, error) {
 			HashPrevBlock:  prevBlock,
 			HashMerkleRoot: merkleRoot,
 			HashReserved:   reserved,
-			NTime:          workTemplate.Header.Time,
-			NBits:          bits,
+			NTime:          reverseUint32(workTemplate.Header.Time),
+			NBits:          reverseUint32(bits),
 			CleanJobs:      true,
 		},
 
@@ -313,12 +321,14 @@ func (z *Zero) Unsubscribe(zc *ZeroClient) {
 // BlockNotify is used to notify the server that a new block has been found and that new work should be sent.
 func (z *Zero) BlockNotify() error {
 	log.Println("[server]", "new block detected")
-	return z.GetWork()
+	return z.GetWork("")
 }
 
 // SubmitBlock to the RPC client.
 // NOTE: this function is to be called via goroutine.
-func (z *Zero) SubmitBlock(rawBlock []byte) (err error) {
+func (z *Zero) SubmitBlock(rawBlock []byte, hash string) (err error) {
+	log.Printf("[BLOCK] Found block '%v'\n", hash)
+
 	block := hex.EncodeToString(rawBlock)
 	var status string
 
@@ -327,8 +337,8 @@ func (z *Zero) SubmitBlock(rawBlock []byte) (err error) {
 			return err
 		}
 
-		if status != "valid?" {
-			return errors.New("not valid: " + status)
+		if status == "" {
+			log.Printf("Block '%v' submission appears successful: %v\n", block, err)
 		}
 
 		return nil
@@ -337,7 +347,7 @@ func (z *Zero) SubmitBlock(rawBlock []byte) (err error) {
 	}
 
 	// Either way, get new work
-	return z.GetWork()
+	return z.GetWork(hash)
 }
 
 // SendWorkAll sends new work to every client.
@@ -363,9 +373,14 @@ func (z *Zero) SendWorkAll(w *Work) {
 
 // Serve runs the client.
 func (zc *ZeroClient) Serve() (err error) {
-	log.Printf("[client %v %v] serving\n", zc.ID, zc.conn.RemoteAddr())
+	log.Printf("[client %v %v] -> serving\n", zc.ID, zc.conn.RemoteAddr())
 	defer func() {
-		log.Printf("[client %v %v] disconnected with error: %v\n", zc.ID, zc.conn.RemoteAddr(), err)
+		if err != nil {
+			log.Printf("[client %v %v] <-!- disconnected with error: %v\n", zc.ID, zc.conn.RemoteAddr(), err)
+			return
+		}
+
+		log.Printf("[client %v %v] <- disconnected\n", zc.ID, zc.conn.RemoteAddr())
 	}()
 
 	defer zc.conn.Close()
@@ -379,8 +394,18 @@ func (zc *ZeroClient) Serve() (err error) {
 		}
 
 		sub := subscribe.(stratum.RequestSubscribe)
-		if len(sub.Params) == 1 && sub.Params[0] == zc.z.Config.UpdateKey {
-			zc.z.BlockNotify()
+		if len(sub.Params) == 2 && sub.Params[0] == zc.z.Config.UpdateKey {
+			zc.z.Subscribe(zc)
+			defer zc.z.Unsubscribe(zc)
+
+			// Check the current work and see if it is the same
+			work := <-zc.WorkChan
+
+			if sub.Params[1] == work.lastBlock {
+				log.Println("[notifier] detected previously mined block")
+				return nil // We mined the last block
+			}
+			return zc.z.BlockNotify()
 		}
 
 		// Write in the server ID
@@ -453,7 +478,6 @@ func (zc *ZeroClient) Serve() (err error) {
 		for {
 			req, err := zc.lrw.ReadStratumTimed(time.Now().Add(InactivityTimeout))
 			if err != nil {
-				log.Println("err", err)
 				return err
 			}
 
@@ -485,7 +509,7 @@ func (zc *ZeroClient) Serve() (err error) {
 		estimatedHashPerSecond := EstimateHashPerSecond(vardiffShares, vardiffDifficulty, elapsedTime)
 		currentHashPerSecond := EstimateHashPerSecond(vardiffTarget, vardiffDifficulty, elapsedTime)
 
-		log.Println("vardiff adjustment", "est:", estimatedHashPerSecond, "curr:", currentHashPerSecond)
+		log.Printf("[client %v %v] vardiff adjustment est: %.3f curr: %.3f\n", zc.ID, zc.conn.RemoteAddr(), estimatedHashPerSecond, currentHashPerSecond)
 
 		if vardiffShares > vardiffTarget && float64(vardiffSharesDead)/float64(vardiffShares) > 0.9 {
 			// TODO: logging
@@ -539,21 +563,23 @@ func (zc *ZeroClient) Serve() (err error) {
 
 			switch req.(type) {
 			case stratum.RequestSubmit:
-				req := req.(stratum.RequestSubmit)
+				var shareStatus = ShareInvalid
 
-				log.Printf("%x %x %x %x\n", req.NTime, noncePart1, req.NoncePart2, req.Solution)
+				if currWork != nil {
+					req := req.(stratum.RequestSubmit)
 
-				// Calculate the target
-				shareStatus := currWork.Check(req.NTime, noncePart1[:], req.NoncePart2[:], req.Solution, diff.ToTarget(), false)
-				if shareStatus == ShareInvalid {
-					if prevWork != nil {
-						// Allow stale shares in the last N seconds.
-						if time.Now().Sub(prevWork.At) < 3*time.Second {
-							// Check if this was a stale share.
-							res := prevWork.Check(req.NTime, noncePart1[:], req.NoncePart2[:], req.Solution, diff.ToTarget(), prevWork.Height != currWork.Height)
-							if res != ShareInvalid {
-								// Accept it anyway
-								shareStatus = ShareOK
+					// Calculate the target
+					shareStatus = currWork.Check(req.NTime, noncePart1[:], req.NoncePart2[:], req.Solution, diff.ToTarget(), false)
+					if shareStatus == ShareInvalid {
+						if prevWork != nil {
+							// Allow stale shares in the last N seconds.
+							if time.Now().Sub(prevWork.At) < 3*time.Second {
+								// Check if this was a stale share.
+								res := prevWork.Check(req.NTime, noncePart1[:], req.NoncePart2[:], req.Solution, diff.ToTarget(), prevWork.Height != currWork.Height)
+								if res != ShareInvalid {
+									// Accept it anyway
+									shareStatus = ShareOK
+								}
 							}
 						}
 					}
@@ -568,7 +594,7 @@ func (zc *ZeroClient) Serve() (err error) {
 
 				// TODO: redis publish, bad share bans
 				// TODO: logger for fail2ban
-				log.Println("share", req.NoncePart2, shareStatus)
+				log.Println("share", shareStatus)
 
 			case stratum.RequestSuggestTarget:
 				// ignored, we use our own vardiff

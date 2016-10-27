@@ -16,8 +16,17 @@ type Config struct {
 	// CoinbaseAddress is the address used in the coinbase.
 	CoinbaseAddress string `json:"coinbase_address"`
 
+	// Name of this server.
+	Name string `json:"name"`
+
 	// Host to listen on.
 	Host string `json:"host"`
+
+	// RedisHost to connect to.
+	RedisHost string `json:"redis_host"`
+
+	// RedisPass for the server.
+	RedisPassword string `json:"redis_password"`
 
 	// Host for pprof.
 	PProfHost string `json:"pprof_host"`
@@ -81,14 +90,8 @@ func loadConfig() (cfg Config, err error) {
 func main() {
 	log.SetFlags(log.Lshortfile | log.LstdFlags | log.Lmicroseconds)
 
-	// Load configuration
-	cfg, err := loadConfig()
-	if err != nil {
-		log.Fatalln("Could not load configuration:", err)
-	}
-
-	if len(os.Args) > 1 && os.Args[1] == "notify" {
-		conn, err := net.Dial("tcp", cfg.Host)
+	if len(os.Args) > 2 && os.Args[1] == "notify" {
+		conn, err := net.Dial("tcp", os.Args[2])
 		if err != nil {
 			log.Fatalln("Could not connect to server", err)
 		}
@@ -98,7 +101,7 @@ func main() {
 			log.Fatalln(err)
 		}
 
-		if _, err := conn.Write([]byte(`{"id": 1, "method": "mining.subscribe", "params": ["` + cfg.UpdateKey + `"]}` + "\n")); err != nil {
+		if _, err := conn.Write([]byte(`{"id": 1, "method": "mining.subscribe", "params": ["` + os.Args[3] + `","` + os.Args[4] + `"]}` + "\n")); err != nil {
 			log.Fatalln(err)
 		}
 
@@ -108,6 +111,12 @@ func main() {
 		}
 
 		return
+	}
+
+	// Load configuration
+	cfg, err := loadConfig()
+	if err != nil {
+		log.Fatalln("Could not load configuration:", err)
 	}
 
 	// Create the mining server

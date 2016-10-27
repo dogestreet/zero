@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 
 	"github.com/dogestreet/zero/equihash"
 	"github.com/dogestreet/zero/stratum"
@@ -25,14 +26,14 @@ func BuildBlockHeader(version uint32, hashPrevBlock, hashMerkleRoot, hashReserve
 }
 
 // Validate checks POW validity of a header.
-func Validate(n, k int, headerNonce []byte, solution []byte, shareTarget, globalTarget stratum.Uint256) ShareStatus {
+func Validate(n, k int, headerNonce []byte, solution []byte, shareTarget, globalTarget stratum.Uint256) (ShareStatus, string) {
 	ok, err := equihash.Verify(n, k, headerNonce, solution)
 	if err != nil {
-		return ShareInvalid
+		return ShareInvalid, ""
 	}
 
 	if !ok {
-		return ShareInvalid
+		return ShareInvalid, ""
 	}
 
 	// Double sha to check the target
@@ -51,12 +52,12 @@ func Validate(n, k int, headerNonce []byte, solution []byte, shareTarget, global
 
 	// Check against the global target
 	if TargetCompare(round2, globalTarget) <= 0 {
-		return ShareBlock
+		return ShareBlock, hex.EncodeToString(round2[:])
 	}
 
 	if TargetCompare(round2, shareTarget) > 1 {
-		return ShareInvalid
+		return ShareInvalid, ""
 	}
 
-	return ShareOK
+	return ShareOK, ""
 }

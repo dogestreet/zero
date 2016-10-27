@@ -31,7 +31,7 @@ type (
 
 // Error implements the error interface for rpcResultError.
 func (rpe rpcResultError) Error() string {
-	return fmt.Sprint(rpe)
+	return fmt.Sprint(map[string]interface{}(rpe))
 }
 
 // NewClient creates a new JSON-RPC client.
@@ -76,9 +76,12 @@ func (c *Client) Call(method string, params []interface{}, result interface{}) e
 		return rpcResultError(rpcResult.Error)
 	}
 
-	// Decode the data inside.
-	if err := json.Unmarshal([]byte(*rpcResult.Result), result); err != nil {
-		return err
+	// Check if there is a result
+	if rpcResult.Result != nil {
+		// Decode the data inside.
+		if err := json.Unmarshal([]byte(*rpcResult.Result), result); err != nil {
+			return err
+		}
 	}
 
 	return nil
