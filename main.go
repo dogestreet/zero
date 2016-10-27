@@ -119,8 +119,13 @@ func main() {
 		log.Fatalln("Could not load configuration:", err)
 	}
 
+	db, err := NewDB(cfg.RedisHost, cfg.RedisPassword)
+	if err != nil {
+		log.Fatalln("Could not connect to DB", err)
+	}
+
 	// Create the mining server
-	z, err := NewZero(cfg)
+	z, err := NewZero(cfg, db)
 	if err != nil {
 		log.Fatalln("Could not start server", err)
 	}

@@ -11,30 +11,26 @@ import (
 // Difficulty ...
 type Difficulty float64
 
-var powLimit *big.Int
+// POWLimit as defined by chainparams.cpp
+var POWLimit *big.Int
 
-// POWLimit returns the powLimit from chainparams.
-func POWLimit() *big.Int {
-	if powLimit == nil {
-		powLimit, _ = new(big.Int).SetString("0x03ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 0)
-	}
-
-	return powLimit
+func init() {
+	POWLimit, _ = new(big.Int).SetString("0x03ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", 0)
 }
 
 // ToTarget converts a vardiff difficulty to a Uint256.
 func (d Difficulty) ToTarget() stratum.Uint256 {
 	var result stratum.Uint256
 	if d == 0 {
-		copy(result[:], POWLimit().Bytes())
+		copy(result[:], POWLimit.Bytes())
 		return result
 	}
 	diff := big.NewInt(int64(d))
 
-	bytes := new(big.Int).Div(POWLimit(), diff).Bytes()
+	bytes := new(big.Int).Div(POWLimit, diff).Bytes()
 
 	if len(bytes) > len(result) {
-		copy(result[:], POWLimit().Bytes())
+		copy(result[:], POWLimit.Bytes())
 		return result
 	}
 
@@ -51,7 +47,7 @@ func FromTarget(target stratum.Uint256) Difficulty {
 		return 10000000000000000000
 	}
 
-	res := new(big.Int).Div(POWLimit(), targ)
+	res := new(big.Int).Div(POWLimit, targ)
 	return Difficulty(res.Uint64())
 }
 

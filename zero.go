@@ -40,6 +40,9 @@ type (
 
 		// RPC client.
 		daemon *rpc.Client
+
+		// Database access.
+		DB *DB
 	}
 
 	// A ZeroClient represents a miner.
@@ -101,7 +104,7 @@ const (
 )
 
 // NewZero creates a new instance of the mining server.
-func NewZero(cfg Config) (*Zero, error) {
+func NewZero(cfg Config, db *DB) (*Zero, error) {
 	z := Zero{
 		idCount: 0,
 
@@ -115,6 +118,7 @@ func NewZero(cfg Config) (*Zero, error) {
 
 		Config: cfg,
 		daemon: nil,
+		DB:     db,
 	}
 
 	if _, err := rand.Read(z.NoncePart1a[:]); err != nil {
@@ -412,7 +416,7 @@ func (zc *ZeroClient) Serve() (err error) {
 		copy(noncePart1[:], zc.z.NoncePart1a[:])
 
 		// Write in the client ID
-		binary.PutUvarint(noncePart1[8:], uint64(zc.ID))
+		binary.LittleEndian.PutUint64(noncePart1[8:], uint64(zc.ID+0x444f47452e535400))
 
 		if err := zc.lrw.WriteStratumTimed(stratum.ResponseSubscribeReply{
 			ID:         sub.ID,
@@ -495,7 +499,6 @@ func (zc *ZeroClient) Serve() (err error) {
 	vardiffTarget := zc.z.Config.VardiffTarget
 	vardiffAllowance := zc.z.Config.VardiffAllowance
 	vardiffMin := Difficulty(zc.z.Config.VardiffMin)
-	vardiffForceChan := make(chan bool)
 	vardiffLastRun := time.Now()
 	vardiffLastSubmit := time.Now()
 	vardiffShares := 0
@@ -512,7 +515,6 @@ func (zc *ZeroClient) Serve() (err error) {
 		log.Printf("[client %v %v] vardiff adjustment est: %.3f curr: %.3f\n", zc.ID, zc.conn.RemoteAddr(), estimatedHashPerSecond, currentHashPerSecond)
 
 		if vardiffShares > vardiffTarget && float64(vardiffSharesDead)/float64(vardiffShares) > 0.9 {
-			// TODO: logging
 			return errors.New("too many dead shares")
 		} else if idleTime >= InactivityTimeout {
 			return errors.New("client idle")
@@ -547,11 +549,6 @@ func (zc *ZeroClient) Serve() (err error) {
 	for {
 		select {
 		case <-vardiffRetargetTicker.C:
-			if err := vardiff(); err != nil {
-				return err
-			}
-
-		case <-vardiffForceChan:
 			if err := vardiff(); err != nil {
 				return err
 			}
@@ -592,9 +589,21 @@ func (zc *ZeroClient) Serve() (err error) {
 				vardiffShares++
 				vardiffLastSubmit = time.Now()
 
-				// TODO: redis publish, bad share bans
-				// TODO: logger for fail2ban
-				log.Println("share", shareStatus)
+				// Submit the share.
+				zc.z.DB.SubmitChan <- Share{
+					Submitter:  username,
+					Difficulty: float64(vardiffDifficulty),
+					Host:       zc.conn.RemoteAddr().String(),
+					Server:     zc.z.Config.Name,
+					Valid:      shareStatus == ShareBlock || shareStatus == ShareOK,
+				}
+
+				// If the user's over target already, run vardiff right here right now
+				if vardiffShares > zc.z.Config.VardiffShares {
+					if err := vardiff(); err != nil {
+						return err
+					}
+				}
 
 			case stratum.RequestSuggestTarget:
 				// ignored, we use our own vardiff
