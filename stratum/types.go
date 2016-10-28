@@ -209,7 +209,7 @@ func Parse(data []byte) (Request, error) {
 	case Subscribe:
 		return RequestSubscribe{
 			RequestBase: base,
-			Params:      params,
+			Params:      nil,
 		}, nil
 
 	case Authorise:

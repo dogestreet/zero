@@ -74,7 +74,7 @@ func CompactToTarget(x uint32) (stratum.Uint256, error) {
 	return result, nil
 }
 
-const c = 1 / 32
+const c = float64(1) / 32
 
 // EstimateHashPerSecond uses the shares returned by the miner to estimate mining speed.
 // We do this by the following deduction:
