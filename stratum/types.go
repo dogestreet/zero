@@ -207,6 +207,7 @@ func Parse(data []byte) (Request, error) {
 
 	switch RequestType(raw.Method) {
 	case Subscribe:
+		// Ignore parameters in subscribe
 		return RequestSubscribe{
 			RequestBase: base,
 			Params:      nil,
