@@ -582,13 +582,11 @@ func (zc *ZeroClient) Serve() (err error) {
 				return errors.New("read chan closed")
 			}
 
-			switch req.(type) {
+			switch req := req.(type) {
 			case stratum.RequestSubmit:
 				var shareStatus = ShareInvalid
 
 				if currWork != nil {
-					req := req.(stratum.RequestSubmit)
-
 					// Calculate the target
 					shareStatus = currWork.Check(req.NTime, noncePart1[:], req.NoncePart2[:], req.Solution, vardiffDifficulty.ToTarget(), false)
 					if shareStatus == ShareInvalid {
