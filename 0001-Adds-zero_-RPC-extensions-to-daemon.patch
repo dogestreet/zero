@@ -1,0 +1,144 @@
+From 46ce40b6e90f05c5bb8f70059c3c0f19315e201c Mon Sep 17 00:00:00 2001
+From: jpmorgan <jpmorgan@doge.st>
+Date: Fri, 28 Oct 2016 14:47:47 +1100
+Subject: [PATCH] Adds zero_ RPC extensions to daemon
+
+---
+ src/rpcblockchain.cpp | 11 ++++++++
+ src/rpcmining.cpp     | 70 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/rpcserver.cpp     |  3 +++
+ src/rpcserver.h       |  1 +
+ 4 files changed, 85 insertions(+)
+
+diff --git a/src/rpcblockchain.cpp b/src/rpcblockchain.cpp
+index 4c92979..ff5f851 100644
+--- a/src/rpcblockchain.cpp
++++ b/src/rpcblockchain.cpp
+@@ -104,9 +104,20 @@ Object blockToJSON(const CBlock& block, const CBlockIndex* blockindex, bool txDe
+     result.push_back(Pair("nonce", block.nNonce.GetHex()));
+     result.push_back(Pair("solution", HexStr(block.nSolution)));
+     result.push_back(Pair("bits", strprintf("%08x", block.nBits)));
++
++    arith_uint256 bnTmp;
++    bnTmp.SetCompact(block.nBits);
++
++    result.push_back(Pair("target", bnTmp.GetHex()));
+     result.push_back(Pair("difficulty", GetDifficulty(blockindex)));
+     result.push_back(Pair("chainwork", blockindex->nChainWork.GetHex()));
+ 
++    CEquihashInput I{block};
++    CDataStream ss(SER_NETWORK, PROTOCOL_VERSION);
++    ss << I;
++    ss << block.nNonce;
++    result.push_back(Pair("header_nonce", HexStr(ss.str())));
++
+     if (blockindex->pprev)
+         result.push_back(Pair("previousblockhash", blockindex->pprev->GetBlockHash().GetHex()));
+     CBlockIndex *pnext = chainActive.Next(blockindex);
+diff --git a/src/rpcmining.cpp b/src/rpcmining.cpp
+index d58e70a..e478860 100644
+--- a/src/rpcmining.cpp
++++ b/src/rpcmining.cpp
+@@ -868,3 +868,73 @@ Value getblocksubsidy(const Array& params, bool fHelp)
+     result.push_back(Pair("founders", ValueFromAmount(nFoundersReward)));
+     return result;
+ }
++
++Value zero_getblocktemplate(const Array& params, bool fHelp)
++{
++    if (fHelp || params.size() < 1 || params.size() > 1)
++        throw runtime_error(
++            "zero_getblocktemplate \"coinbase_address\"\n"
++        );
++
++    // Validate address
++    CBitcoinAddress address(params[0].get_str());
++    if (!address.IsValid()) {
++        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Coinbase address invalid");
++    }
++
++    CTxDestination dest = address.Get();
++    CScript scriptPubKey = GetScriptForDestination(dest);
++
++    unsigned int nExtraNonce = 0;
++
++    // Make the block template
++    unique_ptr<CBlockTemplate> pblocktemplate(CreateNewBlock(scriptPubKey));
++    if (!pblocktemplate.get())
++        throw JSONRPCError(RPC_INTERNAL_ERROR, "Block template failed");
++
++    CBlock *pblock = &pblocktemplate->block;
++
++    int nHeight = 0;
++    {
++        LOCK(cs_main);
++
++        // This call sets the merkle root
++        IncrementExtraNonce(pblock, chainActive.Tip(), nExtraNonce);
++        nHeight = chainActive.Height();
++    }
++
++    // The solution is not yet filled and has a length of zero.
++    for (int i = 0; i < 1344; i++) {
++        pblock->nSolution.push_back(0x90);
++    }
++
++    // The block is now ready to be sent to the miner to start work
++    Object ret;
++    ret.push_back(Pair("height", nHeight));
++    ret.push_back(Pair("n", static_cast<uint64_t>(Params().EquihashN())));
++    ret.push_back(Pair("k", static_cast<uint64_t>(Params().EquihashK())));
++
++    // Return the subsidy as well
++    CAmount nReward = GetBlockSubsidy(nHeight, Params().GetConsensus());
++    CAmount nFoundersReward = 0;
++    if ((nHeight > 0) && (nHeight <= Params().GetConsensus().GetLastFoundersRewardBlockHeight())) {
++        nFoundersReward = nReward/5;
++        nReward -= nFoundersReward;
++    }
++
++    // Write the block header
++    Object block_header;
++    block_header.push_back(Pair("miner_subsidy", ValueFromAmount(nReward)));
++    block_header.push_back(Pair("version", pblock->nVersion));
++    block_header.push_back(Pair("prevblock", pblock->hashPrevBlock.GetHex()));
++    block_header.push_back(Pair("merkleroot", pblock->hashMerkleRoot.GetHex()));
++    block_header.push_back(Pair("reserved", pblock->hashReserved.GetHex()));
++    block_header.push_back(Pair("time", pblock->GetBlockTime()));
++    block_header.push_back(Pair("bits", strprintf("%08x", pblock->nBits)));
++    ret.push_back(Pair("header", block_header));
++
++    CDataStream ssBlock(SER_NETWORK, PROTOCOL_VERSION);
++    ssBlock << *pblock;
++    ret.push_back(Pair("raw", HexStr(ssBlock.begin(), ssBlock.end())));
++    return ret;
++}
+diff --git a/src/rpcserver.cpp b/src/rpcserver.cpp
+index e354e91..1f9a3fe 100644
+--- a/src/rpcserver.cpp
++++ b/src/rpcserver.cpp
+@@ -342,6 +342,9 @@ static const CRPCCommand vRPCCommands[] =
+     { "hidden",             "resendwallettransactions", &resendwallettransactions, true},
+ #endif
+ 
++    /* Mining extensions for zero */
++    { "mining",             "zero_getblocktemplate",  &zero_getblocktemplate,  true  },
++
+ #ifdef ENABLE_WALLET
+     /* Wallet */
+     { "wallet",             "addmultisigaddress",     &addmultisigaddress,     true  },
+diff --git a/src/rpcserver.h b/src/rpcserver.h
+index fd53bf1..bec99e2 100644
+--- a/src/rpcserver.h
++++ b/src/rpcserver.h
+@@ -267,6 +267,7 @@ extern json_spirit::Value z_getoperationresult(const json_spirit::Array& params,
+ extern json_spirit::Value z_listoperationids(const json_spirit::Array& params, bool fHelp); // in rpcwallet.cpp
+ extern json_spirit::Value z_validateaddress(const json_spirit::Array& params, bool fHelp); // in rpcmisc.cpp
+ 
++extern json_spirit::Value zero_getblocktemplate(const json_spirit::Array& params, bool fHelp);
+ 
+ // in rest.cpp
+ extern bool HTTPReq_REST(AcceptedConnection *conn,
+-- 
+2.10.2
+
