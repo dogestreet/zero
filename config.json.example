@@ -1,0 +1,15 @@
+{
+    "coinbase_address": "tmPFndEzcc9H7i31NMtTcfkS31DjMQdLnLz",
+    "name": "dev",
+    "daemon_url": "http://username:password@localhost:18232",
+    "vardiff_retarget_time": 60,
+    "vardiff_target": 3,
+    "vardiff_allowance": 0.25,
+    "vardiff_min": 1,
+    "vardiff_initial": 1,
+    "vardiff_shares": 20,
+    "testnet": true,
+    "update_key": "update_key",
+    "redis_host": "localhost:6379",
+    "redis_password": ""
+}
