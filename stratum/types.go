@@ -3,6 +3,7 @@ package stratum
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"math/big"
 
 	"github.com/hashicorp/errwrap"
@@ -206,11 +207,6 @@ func Parse(data []byte) (Request, error) {
 
 	switch RequestType(raw.Method) {
 	case Subscribe:
-		var params []string
-		if err := json.Unmarshal(*raw.Params, &params); err != nil {
-			return nil, errwrap.Wrapf("error decoding auth params: {{err}}", ErrBadInput)
-		}
-
 		return RequestSubscribe{
 			RequestBase: base,
 			Params:      params,
@@ -219,6 +215,7 @@ func Parse(data []byte) (Request, error) {
 	case Authorise:
 		var params [2]string
 		if err := json.Unmarshal(*raw.Params, &params); err != nil {
+			log.Println(err)
 			return nil, errwrap.Wrapf("error decoding auth params: {{err}}", ErrBadInput)
 		}
 
